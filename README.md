@@ -31,7 +31,8 @@ Manual build of a program using the setver:
 ```
 gcc -Wall -Wextra your_app.c src/http_server.c -o your_app -lssl -lcrypto -lpthread
 ```
-(File Router is just a .h so as long as the compiler can find it, you can use it without any extra .c)
+<sup>(File Router is just a .h so as long as the compiler can find it, you can use it without any extra .c)</sup>
+
 
 To build all the bundled examples at once, run from the repository root:
 
