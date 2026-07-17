@@ -44,11 +44,12 @@ This creates an `example_compiled/` directory with four binaries: simple, filero
 
 ## HTTPS certificates for local testing
 
-The HTTPS examples expect `example/cert.pem` and `example/key.pem`. Generate a self-signed pair with:
+Generate a self-signed pair for your own stuff with:
 
 ```
 bash helpers/genselfsignedssl.sh
 ```
+<sup>(the example build helper already generates one for the examples)</sup>
 
 This is for local testing only. Do not use a self-signed certificate in production.
 
