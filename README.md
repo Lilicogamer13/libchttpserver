@@ -26,19 +26,12 @@ Includes an optional file router extension for serving static files by mapping a
 
 `src/file_router.h` is a single-header module. If you use it, define `FILE_ROUTER_IMPLEMENTATION` in exactly one source file before including it.
 
-Manual build of a program using only the base server:
+Manual build of a program using the setver:
 
 ```
 gcc -Wall -Wextra your_app.c src/http_server.c -o your_app -lssl -lcrypto -lpthread
 ```
-
-Manual build of a program that also uses the file router:
-
-```
-gcc -Wall -Wextra your_app.c src/http_server.c -o your_app -lssl -lcrypto -lpthread
-```
-
-(the file router code lives in the header itself, so no extra .c file is needed for it, just the `FILE_ROUTER_IMPLEMENTATION` define before the include)
+(File Router is just a .h so as long as the compiler can find it, you can use it without any extra .c)
 
 To build all the bundled examples at once, run from the repository root:
 
