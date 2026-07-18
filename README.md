@@ -1,202 +1,119 @@
-# http_server
+# pyhttpserver
 
-A small C library for running an HTTP or HTTPS server. It handles sockets, request parsing, routing, and response sending, so you can register handler functions for specific routes and let the library deal with the networking.
+Python bindings for the vendored `http_server.c` / `file_router.h` C library
+(original: `CustomCServerLibrary/2.0`, see `vendor/`), built as a real CPython
+C extension (`_http_server`) with a Pythonic wrapper on top (`http_server`).
 
-Includes an optional file router extension for serving static files by mapping a URL path to a file on disk.
+## Build & install
 
-## Features
+Requires: gcc/clang, Python 3.8+ dev headers, OpenSSL dev headers.
 
-- Basic HTTP/1.1 request parsing (method, path, version, headers, body)
-- Route registration by method and path
-- Runs in the foreground (blocking) or in a background thread
-- Optional HTTPS support via OpenSSL
-- Optional static file router built on top of the base server
-- No dependencies beyond OpenSSL and pthreads
+```bash
+# Debian/Ubuntu, if you don't already have these:
+sudo apt-get install -y build-essential python3-dev libssl-dev
 
-## Requirements
-
-- A C compiler (gcc or clang)
-- OpenSSL development headers and libraries (libssl, libcrypto)
-- pthreads
-- Linux or another POSIX-like system (uses sockets.h, unistd.h, pthread.h)
-
-## Building
-
-`src/http_server.c` must always be compiled and linked into your program. `src/http_server.h` is a normal header, it does not need an implementation macro.
-
-`src/file_router.h` is a single-header module. If you use it, define `FILE_ROUTER_IMPLEMENTATION` in exactly one source file before including it.
-
-Manual build of a program using the setver:
-
-```
-gcc -Wall -Wextra your_app.c src/http_server.c -o your_app -lssl -lcrypto -lpthread
-```
-<sup>(File Router is just a .h so as long as the compiler can find it, you can use it without any extra .c)</sup>
-
-
-To build all the bundled examples at once, run from the repository root:
-
-```
-bash helpers/examplebuild.sh
+# from this directory:
+pip install .
 ```
 
-This creates an `example_compiled/` directory with four binaries: simple, filerouter, simple_https, filerouter_https.
+For iterative development (rebuild in place, no install):
 
-## HTTPS certificates for local testing
-
-Generate a self-signed pair for your own stuff with:
-
-```
-bash helpers/genselfsignedssl.sh
-```
-<sup>(the example build helper already generates one for the examples)</sup>
-
-This is for local testing only. Do not use a self-signed certificate in production.
-
-## Quick start: basic server
-
-```c
-#include "src/http_server.h"
-#include <stdio.h>
-
-void handle_home_page(const http_request_t *req, int client_fd, SSL *ssl) {
-    const char *body = "<html><body><h1>Hello, World!</h1></body></html>";
-    http_send_response(client_fd, ssl, 200, "OK", "text/html", body);
-}
-
-int main() {
-    http_server_t *server = http_server_create(8080);
-    if (!server) {
-        fprintf(stderr, "Failed to create server\n");
-        return 1;
-    }
-
-    http_server_add_route(server, "GET", "/", handle_home_page);
-
-    // background = 0, this call blocks and runs the server on the current thread
-    http_server_start(server, 0);
-
-    http_server_free(server);
-    return 0;
-}
+```bash
+python3 setup.py build_ext --inplace
 ```
 
-Run it, then visit `http://localhost:8080`.
+This produces `_http_server*.so` in the current directory; you can then
+`import http_server` directly from here without installing.
 
-See `example/simple.c` for a full version that also runs the server in a background thread and shuts down cleanly on Ctrl+C.
+## Quick start
 
-## Quick start: static file server
+```python
+import http_server as hs
 
-```c
-#define FILE_ROUTER_IMPLEMENTATION
-#include "src/file_router.h"
+app = hs.Server(8080)
 
-int main() {
-    file_router_t *router = file_router_create(8080);
-    if (!router) return 1;
+@app.route("GET", "/")
+def index(req, respond):
+    respond(200, "OK", "text/plain", "Hello from Python!")
 
-    file_router_add_file_route(router, "/", "example/www/index.html");
+@app.route("POST", "/echo")
+def echo(req, respond):
+    respond(200, "OK", "text/plain", req.body.decode() if req.body else "")
 
-    file_router_start(router, 1); // background = 1, returns immediately
-
-    // ... keep the process alive here ...
-
-    file_router_free(router);
-    return 0;
-}
+app.start(background=False)   # blocks; Ctrl+C to stop
 ```
 
-`file_router_add_file_route` maps one exact URL path to one file. There is no directory listing or wildcard matching, each file you want served needs its own call.
+`req` is a dict-like `Request` object with `method`, `path`, `version`,
+`headers` (dict), `body` (`bytes | None`). `respond(status_code, status_text,
+content_type, body)` sends the response; `body` may be `str`, `bytes`, or
+`None`.
 
-## API reference
+There's also a context-manager form (always starts in the background):
 
-### Core server (`http_server.h`)
-
-```c
-http_server_t *http_server_create(int port);
-```
-Allocates and initializes a server bound to the given port. Returns NULL on allocation failure. The socket itself is not opened until you call `http_server_start`.
-
-```c
-void http_server_enable_https(http_server_t *server, const char *cert_file, const char *key_file);
-```
-Turns the server into an HTTPS server using the given PEM certificate and key files. Call this before `http_server_start`. This function calls `exit()` on OpenSSL setup failure, so make sure the paths are correct before calling it.
-
-```c
-void http_server_add_route(http_server_t *server, const char *method, const char *path, route_handler_t handler);
-```
-Registers a handler for an exact method and path match (for example `"GET"`, `"/"`). Up to `MAX_ROUTES` (100) routes per server. Routes are matched in the order they were added, first match wins.
-
-```c
-int http_server_start(http_server_t *server, int background);
-```
-Starts listening and accepting connections. If `background` is non-zero, this spawns a thread and returns almost immediately. If `background` is zero, this call blocks the calling thread for as long as the server runs. Returns 0 on success, -1 if the background thread could not be created.
-
-```c
-void http_server_stop(http_server_t *server);
-```
-Signals the server to stop, closes the listening socket, and if it was started in the background, joins that thread before returning. Safe to call from a signal handler as shown in the examples.
-
-```c
-void http_server_free(http_server_t *server);
-```
-Stops the server if it is still running, frees the SSL context if one was created, and frees the server struct itself. Call this once you are done with the server.
-
-```c
-void http_send_response(int client_fd, SSL *ssl, int status_code, const char *status_text,
-                        const char *content_type, const char *body);
-```
-Writes a full HTTP response (status line, headers, body) to the client. Pass `ssl` as NULL for plain HTTP connections, or the SSL pointer given to your handler for HTTPS connections. `body` may be NULL for an empty body. This is the only way handlers should reply to a request; there is no way to stream a response body.
-
-### Request handler signature
-
-```c
-typedef void (*route_handler_t)(const http_request_t *req, int client_fd, SSL *ssl);
+```python
+with hs.Server(8080) as app:
+    ...
+    time.sleep(60)
 ```
 
-Each handler receives the parsed request, the raw client file descriptor, and the SSL pointer (NULL if the connection is plain HTTP). A handler is expected to call `http_send_response` exactly once before returning.
+Serving static files (`FileRouter`, wraps `file_router.h`):
 
-### Request struct
-
-```c
-typedef struct {
-    char method[16];
-    char path[1024];
-    char version[16];
-    http_header_t headers[MAX_HEADERS];
-    int header_count;
-    char *body;
-    size_t body_len;
-} http_request_t;
+```python
+router = hs.FileRouter(8080)
+router.add_file_route("/", "./www/index.html")
+router.start(background=False)
 ```
 
-`headers` holds up to `MAX_HEADERS` (50) parsed header name/value pairs. `body` is heap allocated and owned by the library, it is freed automatically after your handler returns, do not free it yourself and do not keep a pointer to it past the handler call.
+HTTPS:
 
-### File router (`file_router.h`)
-
-```c
-file_router_t *file_router_create(int port);
-void file_router_free(file_router_t *router);
-int file_router_add_file_route(file_router_t *router, const char *route, const char *file_path);
-int file_router_start(file_router_t *router, int background);
-void file_router_stop(file_router_t *router);
+```python
+app.enable_https("cert.pem", "key.pem")
 ```
 
-These wrap the equivalent base server functions. `file_router_add_file_route` reads the entire target file into memory on every request and serves it with a content type guessed from the file extension (html, css, js, json, png, jpg, jpeg, gif, txt, otherwise `application/octet-stream`). Up to `MAX_FILE_ROUTES` (100) mappings per router.
+Lower-level 1:1 API (matches the C functions almost exactly) is available via
+`_http_server.Server`, `_http_server.FileRouter`, `_http_server.send_response`
+if you want to bypass the `respond()` convenience wrapper.
 
-The file router only supports GET requests on exact, pre-registered paths, and does not resolve paths against a directory on disk, so it cannot be used to serve an arbitrary directory tree without registering every file individually.
+## Two bugs fixed in the vendored C during porting
 
-For HTTPS with the file router, call `http_server_enable_https` on the router's `base_server` member before starting it, as shown in `example/filerouter_https.c`.
+These weren't introduced by the binding — they're pre-existing bugs in the
+supplied `http_server.c` that would have made a faithful, unmodified port
+unreliable from Python (and from C, for that matter). Both are marked
+`PATCH (python binding)` in `vendor/http_server.c` with an explanation
+in-line.
 
-## Notes and limitations
+1. **`http_server_stop()` could hang forever.** The background-thread accept
+   loop used a plain blocking `accept()`. Closing the listening socket from
+   another thread (which is what `http_server_stop()` does) doesn't reliably
+   wake a thread blocked in `accept()` on Linux, so the `pthread_join()` in
+   `http_server_stop()`/`http_server_free()` would deadlock. Fixed by
+   `select()`-polling the socket with a 200ms timeout before `accept()`, so
+   the loop periodically re-checks `is_running`.
 
-- One request per connection: the server reads once, handles it, and closes the socket (`Connection: close`). There is no keep-alive support.
-- Routing is exact string matching only. There are no path parameters, wildcards, or query string parsing.
-- The request buffer is fixed at 8192 bytes. Requests larger than this will be truncated.
-- This library does not sanitize file paths in any way, `file_router_add_file_route` will happily read any file the process has permission to read. Do not pass user-controlled input as the `file_path` argument.
-- Not thread-safe for concurrent requests. Each accepted connection is currently handled synchronously inside the accept loop, so one slow handler will block new connections from being accepted.
-- Intended for small tools, local development, and learning purposes rather than production traffic.
+2. **Request bodies could be silently truncated/dropped.** `handle_client()`
+   did exactly one `recv()`/`SSL_read()` call and assumed the whole request
+   (headers *and* body) always arrived in that single read. TCP doesn't
+   guarantee that — under real-world timing a POST body can legitimately
+   arrive in a second packet. This was reproducible (~1 in 5 requests) with
+   a plain `urllib` POST in testing. Fixed by looping reads until the header
+   terminator is seen, then continuing to read (capped at 10MB) until the
+   full `Content-Length` has actually been received.
 
-## License
+## Known limitations (inherited from the C library's design, not fixed)
 
-MIT. See the LICENSE file for the full text.
+- **No per-server context in route callbacks.** `route_handler_t` is a bare
+  C function pointer with no user-data slot, so the Python binding can't
+  tell which `Server` instance a request belongs to — it dispatches by a
+  single process-wide `(method, path)` registry. Don't register the same
+  `(method, path)` pair on two `Server` instances running at the same time.
+- **`FileRouter` is a process-wide singleton.** `file_router.h` stores its
+  state in one global (`global_router_ctx`), so only one `FileRouter` may be
+  alive at a time in the whole process, even across unrelated `Server`
+  instances.
+- **Response bodies are sent via `strlen()`.** `http_send_response()` takes
+  `const char *body` with no explicit length, so a `bytes` body containing
+  an embedded NUL byte will be truncated at that NUL.
+- Fixed-size buffers from the original C API carry over: methods must be
+  under 16 chars, paths under 1024 chars, headers under 50 per request, and
+  at most 100 routes per server (raises `ValueError`/silently no-ops at the
+  C layer respectively, per the original code).

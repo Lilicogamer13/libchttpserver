@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -107,6 +108,17 @@ static int parse_http_request(const char *raw_data, size_t data_len, http_reques
     return 0;
 }
 
+/* PATCH (python binding): used to detect when the body hasn't fully
+ * arrived yet in the initial read (see handle_client()). */
+static long get_content_length(const http_request_t *req) {
+    for (int i = 0; i < req->header_count; i++) {
+        if (strcasecmp(req->headers[i].name, "Content-Length") == 0) {
+            return strtol(req->headers[i].value, NULL, 10);
+        }
+    }
+    return -1;
+}
+
 static void free_http_request_body(http_request_t *req) {
     if (req->body) {
         free(req->body);
@@ -182,15 +194,46 @@ static void handle_client(http_server_t *server, int client_fd) {
     memset(buffer, 0, BUFFER_SIZE);
     int bytes_read = 0;
 
-    if (ssl) {
-        bytes_read = SSL_read(ssl, buffer, BUFFER_SIZE - 1);
-    } else {
-        bytes_read = recv(client_fd, buffer, BUFFER_SIZE - 1, 0);
+    /* PATCH (python binding): the original code did a single recv()/
+     * SSL_read() call and assumed the whole request (headers *and* body)
+     * always arrived in that one read. TCP makes no such guarantee -
+     * a client can send headers and body in separate packets. Loop until
+     * we see the end-of-headers marker (buffer is zero-initialized, so
+     * strstr() on it is safe) or run out of buffer space. */
+    while (bytes_read < BUFFER_SIZE - 1) {
+        int n = ssl ? SSL_read(ssl, buffer + bytes_read, BUFFER_SIZE - 1 - bytes_read)
+                    : recv(client_fd, buffer + bytes_read, BUFFER_SIZE - 1 - bytes_read, 0);
+        if (n <= 0) break;
+        bytes_read += n;
+        if (strstr(buffer, "\r\n\r\n")) break;
     }
 
     if (bytes_read > 0) {
         http_request_t req;
         if (parse_http_request(buffer, bytes_read, &req) == 0) {
+            /* PATCH (python binding): if Content-Length promises more body
+             * than we actually received in the initial read(s), keep
+             * reading until we have it all (capped as a safety net
+             * against a bogus/huge Content-Length value). */
+            long content_length = get_content_length(&req);
+            if (content_length > 0 && (size_t)content_length > req.body_len) {
+                const size_t MAX_BODY = 10 * 1024 * 1024; /* 10MB safety cap */
+                size_t want = (size_t)content_length;
+                if (want > MAX_BODY) want = MAX_BODY;
+
+                char *grown = realloc(req.body, want + 1);
+                if (grown) {
+                    req.body = grown;
+                    while (req.body_len < want) {
+                        int n = ssl ? SSL_read(ssl, req.body + req.body_len, want - req.body_len)
+                                    : recv(client_fd, req.body + req.body_len, want - req.body_len, 0);
+                        if (n <= 0) break;
+                        req.body_len += (size_t)n;
+                    }
+                    req.body[req.body_len] = '\0';
+                }
+            }
+
             int route_found = 0;
             for (int i = 0; i < server->route_count; i++) {
                 if (strcmp(server->routes[i].method, req.method) == 0 &&
@@ -281,6 +324,26 @@ static void run_server_loop(http_server_t *server) {
            server->is_https ? "https" : "http", server->port);
 
     while (server->is_running) {
+        /* PATCH (python binding): the original code called a plain blocking
+         * accept() here. That means http_server_stop() closing server_fd
+         * from another thread does not reliably wake this thread back up
+         * on Linux, so pthread_join() in http_server_stop()/http_server_free()
+         * would hang forever. We poll with select() + a short timeout so the
+         * is_running flag set by http_server_stop() is actually observed. */
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(server->server_fd, &readfds);
+        struct timeval tv = {.tv_sec = 0, .tv_usec = 200000}; /* 200ms */
+
+        int sel = select(server->server_fd + 1, &readfds, NULL, NULL, &tv);
+        if (sel < 0) {
+            if (!server->is_running) break;
+            continue; /* e.g. EINTR */
+        }
+        if (sel == 0) {
+            continue; /* timeout: re-check is_running */
+        }
+
         int client_fd = accept(server->server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen);
         if (client_fd < 0) {
             if (!server->is_running) break;
