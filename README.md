@@ -1,3 +1,5 @@
+(there will be no support for python because python sucks)
+
 # pyhttpserver
 
 Python bindings for the vendored `http_server.c` / `file_router.h` C library
