@@ -28,6 +28,8 @@ file_router_t *file_router_create(int port);
 
 void file_router_free(file_router_t *router);
 
+void file_router_enable_https(file_router_t *router, const char *cert_file, const char *key_file);
+
 int file_router_add_file_route(file_router_t *router, const char *route, const char *file_path);
 
 int file_router_start(file_router_t *router, int background);
@@ -130,6 +132,11 @@ file_router_t *file_router_create(int port) {
     router->mapping_count = 0;
     global_router_ctx = router; 
     return router;
+}
+
+void file_router_enable_https(file_router_t *router, const char *cert_file, const char *key_file) {
+    if (!router) return;
+    http_server_enable_https(router->base_server, cert_file, key_file);
 }
 
 void file_router_free(file_router_t *router) {

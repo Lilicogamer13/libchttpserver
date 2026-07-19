@@ -137,6 +137,10 @@ class FileRouter:
     def __init__(self, port: int):
         self._impl = _http_server.FileRouter(port)
 
+    def enable_https(self, cert_file: str, key_file: str) -> None:
+        """Enable TLS using a PEM cert/key pair. Call before start()."""
+        self._impl.enable_https(cert_file, key_file)
+
     def add_file_route(self, route: str, file_path: str) -> None:
         self._impl.add_file_route(route, file_path)
 

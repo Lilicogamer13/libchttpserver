@@ -353,6 +353,20 @@ FileRouter_init(FileRouterObject *self, PyObject *args, PyObject *kwds)
 }
 
 static PyObject *
+FileRouter_enable_https(FileRouterObject *self, PyObject *args)
+{
+    const char *cert_file, *key_file;
+    if (!PyArg_ParseTuple(args, "ss", &cert_file, &key_file))
+        return NULL;
+
+    Py_BEGIN_ALLOW_THREADS
+    file_router_enable_https(self->router, cert_file, key_file);
+    Py_END_ALLOW_THREADS
+
+    Py_RETURN_NONE;
+}
+
+static PyObject *
 FileRouter_add_file_route(FileRouterObject *self, PyObject *args)
 {
     const char *route, *file_path;
@@ -398,6 +412,8 @@ FileRouter_stop(FileRouterObject *self, PyObject *Py_UNUSED(ignored))
 }
 
 static PyMethodDef FileRouter_methods[] = {
+    {"enable_https", (PyCFunction)FileRouter_enable_https, METH_VARARGS,
+     "enable_https(cert_file, key_file)\n\nEnable TLS using a PEM cert/key pair. Call before start()."},
     {"add_file_route", (PyCFunction)FileRouter_add_file_route, METH_VARARGS,
      "add_file_route(route, file_path)"},
     {"start", (PyCFunction)FileRouter_start, METH_VARARGS | METH_KEYWORDS,

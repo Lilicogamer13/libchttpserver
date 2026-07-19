@@ -378,22 +378,26 @@ int http_server_start(http_server_t *server, int background) {
 
 void http_server_stop(http_server_t *server) {
     server->is_running = 0;
+
     if (server->server_fd != -1) {
+        shutdown(server->server_fd, SHUT_RDWR); // unblocks accept() reliably
         close(server->server_fd);
         server->server_fd = -1;
     }
+
     if (server->thread_id != 0) {
         pthread_join((pthread_t)server->thread_id, NULL);
         server->thread_id = 0;
     }
+
     printf("[Library] Server stopped safely.\n");
 }
 
 void http_server_free(http_server_t *server) {
     if (!server) return;
-    if (server->is_running) {
-        http_server_stop(server);
-    }
+
+    http_server_stop(server);   // safe even if already stopped
+
     if (server->ssl_ctx) {
         SSL_CTX_free(server->ssl_ctx);
         cleanup_openssl();
