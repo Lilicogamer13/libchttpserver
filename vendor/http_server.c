@@ -159,7 +159,7 @@ void http_send_response(int client_fd, SSL *ssl, int status_code, const char *st
 
     int header_len = snprintf(header_buf, sizeof(header_buf),
         "HTTP/1.1 %d %s\r\n"
-        "Server: CustomCServerLibrary/2.0\r\n"
+        "Server: LibCHttpHttpsServer/2.0\r\n"
         "Content-Type: %s\r\n"
         "Content-Length: %zu\r\n"
         "Connection: close\r\n"
